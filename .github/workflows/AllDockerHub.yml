@@ -1,0 +1,97 @@
+name: Docker_Pull_Proxy
+env:
+  tag_name: 'AllDockerHub'
+on:
+  workflow_dispatch:
+    inputs:
+      docker_images:
+        description: '请填写docker镜像名称，多个用英文逗号分开'
+        required: true
+        default: 'alpine:latest'
+jobs:
+  inspect_platforms:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Inspect image manifest
+        run: |
+          IFS=',' read -r -a arr <<< "${{ github.event.inputs.docker_images }}"
+
+          image_array=()
+          curdate=$(date +'%Y%m%d')
+          for image in "${arr[@]}"; do
+            if [[ $image == *":"* ]]; then			
+              IFS=':' read -r name tag <<< "$image"			  
+              if [[ "$tag" == "latest" ]]; then			  
+                image_array+=("${name}:latest")
+              else
+                image_array+=("$image")
+              fi
+            else
+              image_array+=("${image}:latest")
+            fi
+          done
+
+          for image in "${image_array[@]}"; do
+            > platforms.txt
+            docker buildx imagetools inspect ${image} --raw | \
+            jq -r '
+              if .manifests then
+                .manifests[].platform | 
+                "\(.os)/\(.architecture)\(if .variant then "/"+.variant else "" end)"
+              else
+                "\(.os)/\(.architecture)\(if .variant then "/"+.variant else "" end)"
+              end' | \
+            sort | uniq > platforms.txt
+
+            awk '/^[a-z0-9_.-]+\/[a-z0-9_.-]+(\/[a-z0-9_.-]+)?$/' platforms.txt > temp.txt && mv temp.txt platforms.txt
+            grep -E '^(linux|windows|darwin)/(amd64|arm64|arm/v7|ppc64le|s390x)(/[a-z0-9_-]+)?$' platforms.txt > temp.txt && rm platforms.txt && mv temp.txt platforms.txt
+
+            echo "镜像：${image}，支持架构：$(tr '\n' ' ' < platforms.txt)"
+            
+            while IFS= read -r platmp; do
+              docker pull "${image}" --platform "${platmp}"
+
+              plat="${platmp//\//_}"
+              image_name="${image//\//_}"
+              image_name="${image_name//:/_}"
+              image_name="${image_name//latest/lastest${curdate}}"
+              
+              docker save "${image}" -o "${image_name}-${plat}.tar"
+              gzip -c "${image_name}-${plat}.tar" > "${image_name}-${plat}.tar.gz"
+              rm "${image_name}-${plat}.tar"
+              echo "下载打包成功： ${image_name}-${plat}.tar.gz"
+            done < platforms.txt
+          done
+
+      - name: List generated files (debug step)
+        run: |
+          echo "Preparing docker images list (.tar.gz) files:"
+          find $GITHUB_WORKSPACE -name "*.tar.gz"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@master
+        with:
+          tag_name: ${{ env.tag_name }}
+          name: ${{ env.tag_name }}
+          body: |
+            ### How to use? For example
+            `docker load -i alpine_latest.tar.gz `
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload Docker images as release assets
+        uses: softprops/action-gh-release@v2.1.0
+        with:
+          tag_name: ${{ env.tag_name }}
+          files: ${{ github.workspace }}/*.tar.gz
+          token: ${{ secrets.GITHUB_TOKEN }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
