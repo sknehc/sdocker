@@ -1,0 +1,85 @@
+name: SDodckerHub
+on:
+  workflow_dispatch:
+    inputs:
+      d_images:
+        description: '镜像名称，仅支持单个镜像'
+        required: true
+        default: 'alpine:latest'
+      d_platform:
+        description: '镜像架构，仅支持单个架构'
+        required: true
+        default: 'linux/arm64'
+      tag_name:
+        description: 'release标签名，默认SDockerHub'
+        required: true
+        default: 'SDockerHub'
+jobs:
+  inspect_platforms:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Inspect image manifest
+        run: |
+          image=${{github.event.inputs.d_images}}
+          plat=${{github.event.inputs.d_platform}}
+          image="${image// /}"   
+          plat="${plat// /}"
+
+          > platforms.txt
+          docker buildx imagetools inspect ${image} --raw | \
+          jq -r '
+            if .manifests then
+              .manifests[].platform | 
+              "\(.os)/\(.architecture)\(if .variant then "/"+.variant else "" end)"
+            else
+              "\(.os)/\(.architecture)\(if .variant then "/"+.variant else "" end)"
+            end' | \
+          sort | uniq > platforms.txt
+
+          awk '/^[a-z0-9_.-]+\/[a-z0-9_.-]+(\/[a-z0-9_.-]+)?$/' platforms.txt > temp.txt && mv temp.txt platforms.txt
+          grep -E '^(linux|windows|darwin)/(amd64|arm64|arm/v7|ppc64le|s390x)(/[a-z0-9_-]+)?$' platforms.txt > temp.txt && rm platforms.txt && mv temp.txt platforms.txt
+
+          # 判断输入架构，镜像是否支持
+          if ! grep -q "$plat" "platforms.txt"; then
+              echo "${image} 不支持架构 ${plat}，支持架构为：$(tr '\n' ' ' < platforms.txt)"
+              exit 1
+          fi
+
+          echo "镜像：${image}，架构：${plat}，开始缓存"
+          filename="${image//[\/:]/_}-${plat//\//_}"
+          
+          docker pull "${image}" --platform "${plat}" && docker save "${image}" -o "${filename}.tar"          
+          gzip -c "${filename}.tar" > "${filename}.tar.gz" && rm "${filename}.tar"
+          echo "缓存成功： ${filename}.tar.gz"
+
+      - name: List generated files (debug step)
+        run: |
+          find $GITHUB_WORKSPACE -name "*.tar.gz"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@master
+        with:
+          tag_name: ${{github.event.inputs.tag_name}}
+          name: ${{github.event.inputs.tag_name}}
+          body: |
+            ### How to use? For example
+            `docker load -i filename.tar.gz `
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload Docker images as release assets
+        uses: softprops/action-gh-release@v2.1.0
+        with:
+          tag_name: ${{github.event.inputs.tag_name}}
+          files: ${{ github.workspace }}/*.tar.gz
+          token: ${{ secrets.GITHUB_TOKEN }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
