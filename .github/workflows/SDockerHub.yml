@@ -66,7 +66,7 @@ jobs:
         uses: softprops/action-gh-release@master
         with:
           tag_name: ${{github.event.inputs.tag_name}}
-          name: ${{github.event.inputs.tag_name}}
+          name: "Release for ${{github.event.inputs.tag_name}}"
           body: |
             ### How to use? For example
             `docker load -i filename.tar.gz `
