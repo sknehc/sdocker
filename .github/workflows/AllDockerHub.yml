@@ -78,7 +78,7 @@ jobs:
         uses: softprops/action-gh-release@master
         with:
           tag_name: ${{ env.tag_name }}
-          name: ${{ env.tag_name }}
+          name: "Release for ${{ env.tag_name }}"
           body: |
             ### How to use? For example
             `docker load -i alpine_latest.tar.gz `
@@ -94,4 +94,5 @@ jobs:
           files: ${{ github.workspace }}/*.tar.gz
           token: ${{ secrets.GITHUB_TOKEN }}
         env:
+
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
